@@ -1,0 +1,965 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SIRA · Proyección digestiva</title>
+<style>
+  html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#e8e8ec}
+  canvas{position:fixed;left:0;top:0;width:100vw;height:100vh;display:block}
+  #ov{touch-action:none}
+  body.nocursor, body.nocursor canvas{cursor:none}
+  #panel{position:fixed;top:10px;left:10px;width:310px;max-height:calc(100vh - 20px);overflow:auto;box-sizing:border-box;
+    background:rgba(18,20,26,.94);border:1px solid #333;border-radius:10px;padding:12px 14px;font-size:13px;z-index:10;box-shadow:0 4px 20px rgba(0,0,0,.6)}
+  #panel.hidden{display:none}
+  #panel h1{font-size:15px;margin:0 0 8px}
+  #panel h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:#9aa;margin:12px 0 6px}
+  .modes{display:grid;grid-template-columns:1fr 1fr;gap:5px}
+  button{background:#2a2e38;color:#eee;border:1px solid #444;border-radius:6px;padding:6px 8px;font:inherit;cursor:pointer}
+  button:hover{background:#363b48}
+  button.on{background:#1f6feb;border-color:#4b8ff5}
+  button.warn{background:#8a2b2b;border-color:#c44}
+  .row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:4px 0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:2px 8px}
+  label{cursor:pointer;user-select:none}
+  select,input[type=range]{flex:1}
+  select{background:#2a2e38;color:#eee;border:1px solid #444;border-radius:6px;padding:4px}
+  #modehelp{background:#10151d;border-left:3px solid #1f6feb;padding:6px 8px;margin:8px 0 0;line-height:1.4;color:#cfd6e0}
+  .keys{color:#9aa;line-height:1.5;font-size:12px}
+  .keys b{color:#ddd;font-weight:600}
+  .sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:middle}
+  #caption{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);max-width:70vw;text-align:center;background:rgba(0,0,0,.75);
+    padding:10px 18px;border-radius:10px;font-size:20px;display:none;z-index:5}
+  #caption b{display:block;font-size:26px;margin-bottom:2px}
+  #toast{position:fixed;right:16px;top:16px;background:#1f6feb;color:#fff;padding:8px 14px;border-radius:8px;opacity:0;transition:opacity .3s;z-index:20;pointer-events:none}
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<canvas id="ov"></canvas>
+
+<div id="panel">
+  <h1>Proyección · Sistema digestivo</h1>
+  <div class="modes">
+    <button data-mode="mostrar">▶ Mostrar <small>(Espacio)</small></button>
+    <button data-mode="puntos">1 · Puntos <small>(P)</small></button>
+    <button data-mode="malla">2 · Malla <small>(G)</small></button>
+    <button data-mode="mascara">3 · Máscara <small>(M)</small></button>
+  </div>
+  <p id="modehelp"></p>
+
+  <h2>Imagen proyectada</h2>
+  <div class="row">
+    <select id="pattern">
+      <option value="anatomia">Anatomía</option>
+      <option value="contorno">Contorno + referencias</option>
+      <option value="cuadricula">Cuadrícula de prueba</option>
+      <option value="blanco">Blanco (ver cobertura)</option>
+    </select>
+  </div>
+  <div class="row"><span>Brillo</span><input type="range" id="bright" min="0.2" max="1.5" step="0.05"></div>
+  <div class="grid2">
+    <label><input type="checkbox" id="tLabels"> Etiquetas (L)</label>
+    <label><input type="checkbox" id="tAnim"> Animación (A)</label>
+    <label><input type="checkbox" id="tTour"> Recorrido (R)</label>
+    <label><input type="checkbox" id="tMask"> Máscara activa (X)</label>
+  </div>
+
+  <h2>Órganos</h2>
+  <div class="grid2" id="organs"></div>
+
+  <h2>Calibración</h2>
+  <div class="row">Malla: <span id="gridInfo"></span>
+    <button id="gMinus">−</button><button id="gPlus">+</button>
+    <label><input type="checkbox" id="tSmooth"> Suave</label>
+  </div>
+  <div class="row">
+    <button id="bUndo">↶ Deshacer</button>
+    <button id="bExport">Exportar</button>
+    <button id="bImport">Importar</button>
+  </div>
+  <div class="row">
+    <button id="bImg">Imagen propia…</button>
+    <button id="bImgOff">Quitar imagen</button>
+  </div>
+  <div class="row">
+    <button id="bFull">Pantalla completa (F)</button>
+    <button id="bReset">Reiniciar calibración</button>
+  </div>
+
+  <h2>Atajos</h2>
+  <div class="keys">
+    <b>H</b> ocultar panel · <b>F</b> pantalla completa · <b>T</b> cambiar imagen<br>
+    <b>1–0</b> mostrar/ocultar órganos · <b>[ ]</b> brillo<br>
+    <b>Tab</b> siguiente punto · <b>Flechas</b> mover 1 px (<b>Mayús</b> ×10)<br>
+    <b>Mayús+arrastrar</b> mover todo · <b>Rueda</b> escalar todo<br>
+    <b>Supr</b> / clic derecho: quitar · <b>Ctrl+Z</b> deshacer · <b>Ctrl+S</b> exportar<br>
+    En recorrido: <b>← →</b> órgano anterior/siguiente
+  </div>
+  <input type="file" id="fImport" accept=".json,application/json" hidden>
+  <input type="file" id="fImg" accept="image/*" hidden>
+</div>
+<div id="caption"></div>
+<div id="toast"></div>
+
+<script>
+'use strict';
+/* =====================================================================
+   Espacio "fuente": el dibujo anatómico vive en un lienzo de 1000×1300
+   unidades (torso de bebé, de cuello a pubis, visto de frente: el lado
+   DERECHO del bebé queda a la IZQUIERDA del espectador). Ese lienzo se
+   deforma sobre la pantalla del proyector mediante:
+     1) puntos de referencia  -> thin-plate spline (deformación global)
+     2) malla de nodos        -> desplazamientos finos (Catmull-Rom)
+     3) máscara poligonal     -> negro fuera del maniquí
+   ===================================================================== */
+const SW = 1000, SH = 1300, Q = 1.5;          // tamaño fuente y calidad de textura
+const KEY = 'sira-proyeccion-v1', KEY_IMG = 'sira-proyeccion-img';
+const $ = s => document.querySelector(s);
+
+/* ---------- utilidades geométricas ---------- */
+function catmull(p0, p1, p2, p3, t) {
+  const t2 = t * t, t3 = t2 * t;
+  return 0.5 * (2 * p1 + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t3);
+}
+function smooth(pts, closed = false, seg = 10) {
+  const n = pts.length, out = [];
+  const g = i => closed ? pts[(i + n) % n] : pts[Math.max(0, Math.min(n - 1, i))];
+  const last = closed ? n : n - 1;
+  for (let i = 0; i < last; i++) {
+    const a = g(i - 1), b = g(i), c = g(i + 1), d = g(i + 2);
+    for (let s = 0; s < seg; s++) {
+      const t = s / seg;
+      out.push([catmull(a[0], b[0], c[0], d[0], t), catmull(a[1], b[1], c[1], d[1], t)]);
+    }
+  }
+  if (!closed) out.push(pts[n - 1].slice());
+  return out;
+}
+function resample(pts, step) {
+  const out = [pts[0].slice()];
+  let need = step;
+  for (let i = 1; i < pts.length; i++) {
+    let [x0, y0] = pts[i - 1];
+    const [x1, y1] = pts[i];
+    let seg = Math.hypot(x1 - x0, y1 - y0);
+    while (seg >= need) {
+      const t = need / seg;
+      x0 += (x1 - x0) * t; y0 += (y1 - y0) * t;
+      out.push([x0, y0]);
+      seg -= need; need = step;
+    }
+    need -= seg;
+  }
+  return out;
+}
+function pathOf(c, pts, closed) {
+  c.beginPath();
+  c.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) c.lineTo(pts[i][0], pts[i][1]);
+  if (closed) c.closePath();
+}
+function distSeg(p, a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1], L = dx * dx + dy * dy || 1;
+  const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L));
+  return Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy);
+}
+
+/* ---------- anatomía (coordenadas fuente) ---------- */
+const A = {};
+A.eso = smooth([[505, 20], [507, 140], [510, 260], [516, 360], [530, 420], [548, 448]]);
+A.stomach = smooth([[548, 445], [585, 410], [655, 400], [728, 435], [772, 505], [770, 595], [735, 665], [665, 712], [585, 722],
+  [522, 702], [492, 676], [512, 652], [568, 656], [618, 622], [640, 562], [622, 500], [584, 468]], true);
+A.stomachC = smooth([[548, 448], [610, 465], [680, 510], [705, 590], [665, 662], [585, 685], [495, 676]]);
+A.duo = smooth([[495, 676], [455, 688], [428, 720], [422, 765], [442, 800], [492, 812], [550, 802], [590, 790], [606, 768]]);
+A.panc = smooth([[455, 725], [500, 735], [580, 720], [670, 695], [750, 665], [785, 680], [760, 705], [680, 730], [590, 760],
+  [520, 785], [470, 785], [450, 760]], true);
+A.pancDuct = smooth([[470, 760], [540, 755], [620, 735], [700, 708], [765, 683]]);
+A.liver = smooth([[215, 480], [290, 425], [400, 400], [500, 405], [560, 425], [565, 450], [520, 480], [470, 530], [420, 590],
+  [360, 640], [290, 660], [235, 640], [208, 580]], true);
+A.si = (() => {
+  const pts = [[606, 768], [640, 820], [668, 872]];
+  const rows = 5, y0 = 902, dy = 38, xl = 372, xr = 676;
+  for (let r = 0; r < rows; r++) {
+    const y = y0 + r * dy, ltr = r % 2 === 1;
+    for (let k = 0; k <= 10; k++) {
+      const f = k / 10, x = ltr ? xl + (xr - xl) * f : xr - (xr - xl) * f;
+      pts.push([x, y + 8 * Math.sin(f * Math.PI * 4 + r)]);
+    }
+  }
+  pts.push([345, 1072], [318, 1082]);
+  return smooth(pts, false, 8);
+})();
+A.colon = smooth([[300, 1085], [288, 1000], [284, 900], [287, 810], [305, 762], [380, 815], [470, 848], [560, 853], [650, 828],
+  [728, 772], [765, 722], [762, 800], [752, 900], [746, 1010], [722, 1090], [652, 1120], [592, 1105], [548, 1130], [516, 1180]]);
+A.app = smooth([[300, 1100], [306, 1140], [322, 1172], [340, 1185]]);
+A.rect = smooth([[516, 1180], [506, 1230], [502, 1290]]);
+
+function tube(c, pts, w, col, dark, light) {
+  c.lineCap = 'round'; c.lineJoin = 'round';
+  pathOf(c, pts);
+  c.strokeStyle = dark; c.lineWidth = w + 7; c.stroke();
+  c.strokeStyle = col; c.lineWidth = w; c.stroke();
+  const a = c.globalAlpha; c.globalAlpha = a * 0.55;
+  c.strokeStyle = light; c.lineWidth = w * 0.3; c.stroke();
+  c.globalAlpha = a;
+}
+function blob(c, pts, c1, c2, edge, cx, cy, r) {
+  pathOf(c, pts, true);
+  const g = c.createRadialGradient(cx, cy, r * 0.1, cx, cy, r);
+  g.addColorStop(0, c1); g.addColorStop(1, c2);
+  c.fillStyle = g; c.fill();
+  c.lineWidth = 5; c.strokeStyle = edge; c.lineJoin = 'round'; c.stroke();
+}
+function haustra(c, pts, w, col) {
+  const r = resample(pts, 26);
+  c.strokeStyle = col; c.lineWidth = 3; c.lineCap = 'round';
+  for (let i = 1; i < r.length - 1; i++) {
+    const dx = r[i + 1][0] - r[i - 1][0], dy = r[i + 1][1] - r[i - 1][1], L = Math.hypot(dx, dy) || 1;
+    const nx = -dy / L, ny = dx / L, h = w * 0.42;
+    c.beginPath();
+    c.moveTo(r[i][0] + nx * h, r[i][1] + ny * h);
+    c.quadraticCurveTo(r[i][0] + dx / L * 7, r[i][1] + dy / L * 7, r[i][0] - nx * h, r[i][1] - ny * h);
+    c.stroke();
+  }
+}
+
+// Orden = orden del recorrido y de las teclas 1..9,0
+const ORGANS = [
+  { id: 'esofago', name: 'Esófago', color: '#ff8fa3', anchor: [508, 200], label: [640, 170],
+    desc: 'Tubo muscular que lleva el alimento de la boca al estómago.',
+    draw: c => tube(c, A.eso, 24, '#ff8fa3', '#5a1d2a', '#ffd6df') },
+  { id: 'estomago', name: 'Estómago', color: '#ff6f61', anchor: [690, 560], label: [850, 470],
+    desc: 'Mezcla el alimento con los jugos gástricos y lo convierte en quimo.',
+    draw: c => {
+      blob(c, A.stomach, '#ffa494', '#d9433a', '#5a1212', 660, 540, 260);
+      c.save(); pathOf(c, A.stomach, true); c.clip();
+      c.strokeStyle = 'rgba(255,220,210,.35)'; c.lineWidth = 3;
+      for (const [ox, oy] of [[-18, -12], [0, 0], [18, 12]]) {
+        c.save(); c.translate(ox, oy); pathOf(c, A.stomachC.slice(6, -12)); c.stroke(); c.restore();
+      }
+      c.restore();
+    } },
+  { id: 'higado', name: 'Hígado', color: '#b5523b', anchor: [330, 520], label: [240, 370],
+    desc: 'Produce la bilis y procesa los nutrientes absorbidos.',
+    draw: c => {
+      blob(c, A.liver, '#dc7c62', '#8f3524', '#4a1810', 380, 480, 300);
+      c.strokeStyle = 'rgba(60,15,8,.7)'; c.lineWidth = 4;
+      pathOf(c, smooth([[478, 404], [462, 470], [430, 560]])); c.stroke();
+    } },
+  { id: 'vesicula', name: 'Vesícula biliar', color: '#5ccf6a', anchor: [405, 650], label: [215, 720],
+    desc: 'Almacena la bilis y la libera hacia el duodeno.',
+    draw: c => {
+      c.strokeStyle = '#3d9b48'; c.lineWidth = 5; c.lineCap = 'round';
+      pathOf(c, smooth([[415, 672], [430, 690], [440, 705]])); c.stroke();
+      c.save(); c.translate(405, 640); c.rotate(-0.5);
+      const g = c.createRadialGradient(-6, -8, 4, 0, 0, 44);
+      g.addColorStop(0, '#b6f5b0'); g.addColorStop(1, '#2f9b3e');
+      c.beginPath(); c.ellipse(0, 0, 22, 40, 0, 0, Math.PI * 2);
+      c.fillStyle = g; c.fill(); c.lineWidth = 4; c.strokeStyle = '#174a1d'; c.stroke();
+      c.restore();
+    } },
+  { id: 'pancreas', name: 'Páncreas', color: '#ffe066', anchor: [725, 690], label: [860, 640],
+    desc: 'Produce enzimas digestivas y hormonas como la insulina.',
+    draw: c => {
+      blob(c, A.panc, '#fff3b0', '#e0b030', '#5a4300', 600, 740, 220);
+      c.strokeStyle = 'rgba(120,90,0,.6)'; c.lineWidth = 3; pathOf(c, A.pancDuct); c.stroke();
+    } },
+  { id: 'duodeno', name: 'Duodeno', color: '#ffb07a', anchor: [425, 755], label: [190, 800],
+    desc: 'Primera parte del intestino delgado: recibe la bilis y el jugo pancreático.',
+    draw: c => tube(c, A.duo, 24, '#ffb07a', '#5a2e10', '#ffe3cc') },
+  { id: 'delgado', name: 'Intestino delgado', color: '#ff9eb5', anchor: [520, 985], label: [520, 985],
+    desc: 'Yeyuno e íleon: aquí se absorbe la mayor parte de los nutrientes.',
+    draw: c => tube(c, A.si, 22, '#ff9eb5', '#5a1f30', '#ffe3ec') },
+  { id: 'grueso', name: 'Intestino grueso', color: '#e0a040', anchor: [752, 920], label: [860, 960],
+    desc: 'Colon: absorbe agua y sales y forma las heces.',
+    draw: c => {
+      c.beginPath(); c.arc(300, 1090, 30, 0, Math.PI * 2); c.fillStyle = '#e0a040'; c.fill();
+      c.lineWidth = 7; c.strokeStyle = '#4a2c08'; c.stroke();
+      tube(c, A.colon, 46, '#e0a040', '#4a2c08', '#ffdc96');
+      haustra(c, A.colon, 46, 'rgba(80,45,5,.55)');
+    } },
+  { id: 'apendice', name: 'Apéndice', color: '#d39a3c', anchor: [328, 1176], label: [190, 1225],
+    desc: 'Pequeña prolongación del ciego, al inicio del intestino grueso.',
+    draw: c => tube(c, A.app, 12, '#e0a040', '#4a2c08', '#ffdc96') },
+  { id: 'recto', name: 'Recto', color: '#c9822e', anchor: [504, 1250], label: [650, 1262],
+    desc: 'Última porción del intestino: almacena las heces hasta su expulsión.',
+    draw: c => tube(c, A.rect, 40, '#c9822e', '#4a2c08', '#f0c070') },
+];
+const ORG = Object.fromEntries(ORGANS.map(o => [o.id, o]));
+const DRAW_ORDER = ['pancreas', 'duodeno', 'delgado', 'grueso', 'apendice', 'recto', 'estomago', 'higado', 'vesicula', 'esofago'];
+const TRACT = resample([...A.eso, ...A.stomachC, ...A.duo, ...A.si, ...A.colon, ...A.rect], 3);
+
+/* ---------- puntos de referencia del maniquí ---------- */
+const LANDMARKS = [
+  { id: 'notch', name: 'Hueco supraesternal', s: [500, 45] },
+  { id: 'hombroD', name: 'Hombro der.', s: [130, 95] },
+  { id: 'hombroI', name: 'Hombro izq.', s: [870, 95] },
+  { id: 'pezonD', name: 'Pezón der.', s: [310, 320] },
+  { id: 'pezonI', name: 'Pezón izq.', s: [690, 320] },
+  { id: 'xifoides', name: 'Xifoides', s: [500, 430] },
+  { id: 'ombligo', name: 'Ombligo', s: [500, 940] },
+  { id: 'caderaD', name: 'Cadera der.', s: [175, 1150] },
+  { id: 'caderaI', name: 'Cadera izq.', s: [825, 1150] },
+  { id: 'pubis', name: 'Pubis', s: [500, 1290] },
+];
+const TORSO_L = [[410, 0], [395, 40], [300, 62], [180, 85], [115, 130], [120, 250], [140, 420], [155, 620], [160, 820],
+  [165, 1000], [180, 1150], [230, 1250], [330, 1300]];
+
+/* ---------- estado ---------- */
+function defaultCalib() {
+  const lm = {};
+  LANDMARKS.forEach(l => lm[l.id] = { placed: false, x: 0, y: 0 });
+  return { base: { cx: 0.5, cy: 0.5, h: 0.9 }, lm, smooth: true,
+    grid: { cols: 7, rows: 9, off: Array.from({ length: 63 }, () => [0, 0]) },
+    mask: { enabled: false, pts: [] } };
+}
+function defaultView() {
+  return { organs: Object.fromEntries(ORGANS.map(o => [o.id, true])), labels: false, anim: true, tour: false,
+    brightness: 1, pattern: 'anatomia' };
+}
+let calib = defaultCalib(), view = defaultView(), mode = 'mostrar';
+let sel = null, drag = null, tourIdx = 0, tourT = 0, customImg = null;
+let meshDirty = true, srcDirty = true;
+
+function sanitizeCalib(c) {
+  const d = defaultCalib();
+  if (!c || typeof c !== 'object') return d;
+  if (c.base) Object.assign(d.base, c.base);
+  if (c.lm) for (const l of LANDMARKS) if (c.lm[l.id]) Object.assign(d.lm[l.id], c.lm[l.id]);
+  if (typeof c.smooth === 'boolean') d.smooth = c.smooth;
+  if (c.grid && c.grid.cols >= 2 && c.grid.rows >= 2 && Array.isArray(c.grid.off) && c.grid.off.length === c.grid.cols * c.grid.rows)
+    d.grid = { cols: c.grid.cols, rows: c.grid.rows, off: c.grid.off.map(o => [+o[0] || 0, +o[1] || 0]) };
+  if (c.mask) { d.mask.enabled = !!c.mask.enabled; if (Array.isArray(c.mask.pts)) d.mask.pts = c.mask.pts.map(p => [+p[0], +p[1]]); }
+  return d;
+}
+function applyData(d) {
+  calib = sanitizeCalib(d.calib);
+  const v = defaultView();
+  if (d.view) { Object.assign(v, d.view); v.organs = Object.assign(defaultView().organs, d.view.organs || {}); }
+  view = v; meshDirty = srcDirty = true; sel = null;
+}
+let saveTimer = 0;
+function saveSoon() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => { try { localStorage.setItem(KEY, JSON.stringify({ calib, view })); } catch (e) {} }, 250);
+}
+const undoStack = []; let lastUndo = 0;
+function pushUndo(throttle) {
+  const now = performance.now();
+  if (throttle && now - lastUndo < 800) { lastUndo = now; return; }
+  lastUndo = now;
+  undoStack.push(JSON.stringify(calib));
+  if (undoStack.length > 80) undoStack.shift();
+}
+function undo() {
+  if (!undoStack.length) return toast('Nada que deshacer');
+  calib = sanitizeCalib(JSON.parse(undoStack.pop()));
+  sel = null; changed(); syncUI(); toast('Deshecho');
+}
+function changed() { meshDirty = true; saveSoon(); }
+
+/* ---------- deformación ---------- */
+let W = innerWidth, H = innerHeight, DPR = window.devicePixelRatio || 1;
+let warpFn = (x, y) => [x, y];
+
+function baseMap(sx, sy) {
+  const k = calib.base.h * H / SH;
+  return [calib.base.cx * W + (sx - SW / 2) * k, calib.base.cy * H + (sy - SH / 2) * k];
+}
+function solve(M, rhs) { // Gauss con pivoteo parcial; rhs = array de columnas
+  const n = M.length, A2 = M.map((r, i) => [...r, ...rhs.map(b => b[i])]), m = rhs.length;
+  for (let c = 0; c < n; c++) {
+    let p = c;
+    for (let r = c + 1; r < n; r++) if (Math.abs(A2[r][c]) > Math.abs(A2[p][c])) p = r;
+    if (Math.abs(A2[p][c]) < 1e-10) throw new Error('singular');
+    [A2[c], A2[p]] = [A2[p], A2[c]];
+    for (let r = 0; r < n; r++) if (r !== c) {
+      const f = A2[r][c] / A2[c][c];
+      if (f) for (let k = c; k < n + m; k++) A2[r][k] -= f * A2[c][k];
+    }
+  }
+  return rhs.map((_, j) => A2.map((r, i) => r[n + j] / r[i]));
+}
+function similarity(a, b) {
+  const sx = b.s[0] - a.s[0], sy = b.s[1] - a.s[1], tx = b.t[0] - a.t[0], ty = b.t[1] - a.t[1];
+  const d = sx * sx + sy * sy || 1, re = (tx * sx + ty * sy) / d, im = (ty * sx - tx * sy) / d;
+  return (x, y) => {
+    const dx = x - a.s[0], dy = y - a.s[1];
+    return [a.t[0] + re * dx - im * dy, a.t[1] + im * dx + re * dy];
+  };
+}
+function thinPlate(P) {
+  const n = P.length, sc = 1 / 1000, U = r2 => r2 < 1e-12 ? 0 : r2 * Math.log(r2);
+  const S = P.map(p => [p.s[0] * sc, p.s[1] * sc]);
+  const M = [];
+  for (let i = 0; i < n + 3; i++) M.push(new Array(n + 3).fill(0));
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) M[i][j] = U((S[i][0] - S[j][0]) ** 2 + (S[i][1] - S[j][1]) ** 2);
+    M[i][n] = M[n][i] = 1; M[i][n + 1] = M[n + 1][i] = S[i][0]; M[i][n + 2] = M[n + 2][i] = S[i][1];
+  }
+  const bx = [...P.map(p => p.t[0]), 0, 0, 0], by = [...P.map(p => p.t[1]), 0, 0, 0];
+  const [wx, wy] = solve(M, [bx, by]);
+  return (x, y) => {
+    const X = x * sc, Y = y * sc;
+    let rx = wx[n] + wx[n + 1] * X + wx[n + 2] * Y, ry = wy[n] + wy[n + 1] * X + wy[n + 2] * Y;
+    for (let i = 0; i < n; i++) {
+      const u = U((X - S[i][0]) ** 2 + (Y - S[i][1]) ** 2);
+      rx += wx[i] * u; ry += wy[i] * u;
+    }
+    return [rx, ry];
+  };
+}
+function placedList() {
+  return LANDMARKS.filter(l => calib.lm[l.id].placed).map(l => ({ s: l.s, t: [calib.lm[l.id].x * W, calib.lm[l.id].y * H] }));
+}
+function buildWarp() {
+  const P = placedList();
+  if (P.length === 0) warpFn = baseMap;
+  else if (P.length === 1) {
+    const b = baseMap(...P[0].s), dx = P[0].t[0] - b[0], dy = P[0].t[1] - b[1];
+    warpFn = (x, y) => { const p = baseMap(x, y); return [p[0] + dx, p[1] + dy]; };
+  } else if (P.length === 2) warpFn = similarity(P[0], P[1]);
+  else { try { warpFn = thinPlate(P); } catch (e) { warpFn = similarity(P[0], P[1]); } }
+}
+function cw(t) { const t2 = t * t, t3 = t2 * t; return [(-t3 + 2 * t2 - t) / 2, (3 * t3 - 5 * t2 + 2) / 2, (-3 * t3 + 4 * t2 + t) / 2, (t3 - t2) / 2]; }
+function offsetAt(sx, sy, grid = calib.grid) {
+  const { cols: C, rows: R, off } = grid;
+  const u = Math.min(Math.max(sx / SW, 0), 1) * (C - 1), v = Math.min(Math.max(sy / SH, 0), 1) * (R - 1);
+  const i = Math.min(Math.floor(u), C - 2), j = Math.min(Math.floor(v), R - 2), fu = u - i, fv = v - j;
+  const g = (a, b) => off[Math.min(Math.max(b, 0), R - 1) * C + Math.min(Math.max(a, 0), C - 1)];
+  let dx = 0, dy = 0;
+  if (calib.smooth) {
+    const wu = cw(fu), wv = cw(fv);
+    for (let b = 0; b < 4; b++) for (let a = 0; a < 4; a++) {
+      const o = g(i - 1 + a, j - 1 + b), w = wu[a] * wv[b];
+      dx += o[0] * w; dy += o[1] * w;
+    }
+  } else {
+    const q = [[g(i, j), (1 - fu) * (1 - fv)], [g(i + 1, j), fu * (1 - fv)], [g(i, j + 1), (1 - fu) * fv], [g(i + 1, j + 1), fu * fv]];
+    for (const [o, w] of q) { dx += o[0] * w; dy += o[1] * w; }
+  }
+  return [dx, dy]; // normalizado
+}
+function finalMap(sx, sy) {
+  const p = warpFn(sx, sy), o = offsetAt(sx, sy);
+  return [p[0] + o[0] * W, p[1] + o[1] * H];
+}
+function nodeSrc(i) {
+  const { cols: C, rows: R } = calib.grid;
+  return [(i % C) / (C - 1) * SW, Math.floor(i / C) / (R - 1) * SH];
+}
+function resizeGrid(C, R) {
+  C = Math.max(2, Math.min(25, C)); R = Math.max(2, Math.min(30, R));
+  const old = calib.grid, off = [];
+  for (let j = 0; j < R; j++) for (let i = 0; i < C; i++) off.push(offsetAt(i / (C - 1) * SW, j / (R - 1) * SH, old));
+  calib.grid = { cols: C, rows: R, off };
+}
+
+/* ---------- WebGL ---------- */
+const glc = $('#gl'), ov = $('#ov'), octx = ov.getContext('2d');
+const gl = glc.getContext('webgl', { antialias: true, alpha: false });
+const src = document.createElement('canvas'); src.width = SW * Q; src.height = SH * Q;
+const sctx = src.getContext('2d');
+const DC = 50, DR = 64;
+let prog, posBuf, uvBuf, idxBuf, tex, uRes, uBright, nIdx;
+function initGL() {
+  const vs = `attribute vec2 p;attribute vec2 uv;uniform vec2 res;varying vec2 v;
+    void main(){v=uv;vec2 c=p/res*2.0-1.0;gl_Position=vec4(c.x,-c.y,0.0,1.0);}`;
+  const fs = `precision mediump float;varying vec2 v;uniform sampler2D t;uniform float b;
+    void main(){gl_FragColor=vec4(texture2D(t,v).rgb*b,1.0);}`;
+  const sh = (type, s) => { const o = gl.createShader(type); gl.shaderSource(o, s); gl.compileShader(o);
+    if (!gl.getShaderParameter(o, gl.COMPILE_STATUS)) throw gl.getShaderInfoLog(o); return o; };
+  prog = gl.createProgram();
+  gl.attachShader(prog, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(prog); gl.useProgram(prog);
+  uRes = gl.getUniformLocation(prog, 'res'); uBright = gl.getUniformLocation(prog, 'b');
+  const uv = new Float32Array((DC + 1) * (DR + 1) * 2);
+  let k = 0;
+  for (let r = 0; r <= DR; r++) for (let c = 0; c <= DC; c++) { uv[k++] = c / DC; uv[k++] = r / DR; }
+  const idx = new Uint16Array(DC * DR * 6); k = 0;
+  for (let r = 0; r < DR; r++) for (let c = 0; c < DC; c++) {
+    const a = r * (DC + 1) + c, b = a + 1, d = a + DC + 1, e = d + 1;
+    idx.set([a, b, d, b, e, d], k); k += 6;
+  }
+  nIdx = idx.length;
+  posBuf = gl.createBuffer();
+  uvBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, uvBuf); gl.bufferData(gl.ARRAY_BUFFER, uv, gl.STATIC_DRAW);
+  idxBuf = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
+  tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  const pl = gl.getAttribLocation(prog, 'p'), ul = gl.getAttribLocation(prog, 'uv');
+  gl.bindBuffer(gl.ARRAY_BUFFER, posBuf); gl.enableVertexAttribArray(pl); gl.vertexAttribPointer(pl, 2, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, uvBuf); gl.enableVertexAttribArray(ul); gl.vertexAttribPointer(ul, 2, gl.FLOAT, false, 0, 0);
+}
+let nodesScr = [], meshLines = [];
+function rebuild() {
+  buildWarp();
+  const pos = new Float32Array((DC + 1) * (DR + 1) * 2);
+  let k = 0;
+  for (let r = 0; r <= DR; r++) for (let c = 0; c <= DC; c++) {
+    const m = finalMap(c / DC * SW, r / DR * SH);
+    pos[k++] = m[0]; pos[k++] = m[1];
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, posBuf); gl.bufferData(gl.ARRAY_BUFFER, pos, gl.DYNAMIC_DRAW);
+  const { cols: C, rows: R } = calib.grid;
+  nodesScr = calib.grid.off.map((_, i) => finalMap(...nodeSrc(i)));
+  meshLines = [];
+  const steps = 12;
+  for (let j = 0; j < R; j++) { const L = []; for (let t = 0; t <= (C - 1) * steps; t++) L.push(finalMap(t / ((C - 1) * steps) * SW, j / (R - 1) * SH)); meshLines.push(L); }
+  for (let i = 0; i < C; i++) { const L = []; for (let t = 0; t <= (R - 1) * steps; t++) L.push(finalMap(i / (C - 1) * SW, t / ((R - 1) * steps) * SH)); meshLines.push(L); }
+  meshDirty = false;
+}
+function resize() {
+  W = innerWidth; H = innerHeight; DPR = window.devicePixelRatio || 1;
+  for (const c of [glc, ov]) { c.width = Math.round(W * DPR); c.height = Math.round(H * DPR); }
+  gl.viewport(0, 0, glc.width, glc.height);
+  meshDirty = true;
+}
+
+/* ---------- dibujo de la imagen fuente ---------- */
+function drawLabel(c, o, big) {
+  const [ax, ay] = o.anchor, [lx, ly] = o.label, fs = big ? 40 : 26;
+  c.save();
+  c.shadowBlur = 0; c.globalAlpha = 1;
+  if (ax !== lx || ay !== ly) {
+    c.strokeStyle = 'rgba(0,0,0,.8)'; c.lineWidth = 6; c.beginPath(); c.moveTo(ax, ay); c.lineTo(lx, ly); c.stroke();
+    c.strokeStyle = '#fff'; c.lineWidth = 2.5; c.stroke();
+    c.fillStyle = '#fff'; c.beginPath(); c.arc(ax, ay, 6, 0, Math.PI * 2); c.fill();
+  }
+  c.font = `700 ${fs}px system-ui,sans-serif`; c.textAlign = 'center'; c.textBaseline = 'middle';
+  c.lineJoin = 'round'; c.lineWidth = 8; c.strokeStyle = 'rgba(0,0,0,.92)'; c.strokeText(o.name, lx, ly);
+  c.fillStyle = '#fff'; c.fillText(o.name, lx, ly);
+  c.restore();
+}
+function drawAnatomy(c, now, alpha) {
+  if (customImg) {
+    const k = Math.min(SW / customImg.width, SH / customImg.height), w = customImg.width * k, h = customImg.height * k;
+    c.globalAlpha = alpha; c.drawImage(customImg, (SW - w) / 2, (SH - h) / 2, w, h); c.globalAlpha = 1;
+    return;
+  }
+  const hl = view.tour ? ORGANS[tourIdx].id : null;
+  const order = DRAW_ORDER.filter(id => view.organs[id] && id !== hl);
+  if (hl) order.push(hl);
+  for (const id of order) {
+    c.save();
+    c.globalAlpha = alpha * (hl && id !== hl ? 0.18 : 1);
+    if (id === hl) { c.shadowColor = 'rgba(255,255,255,.95)'; c.shadowBlur = 18 + 16 * Math.sin(now * 4); }
+    ORG[id].draw(c);
+    c.restore();
+  }
+  if (view.anim && !hl) {
+    const n = TRACT.length;
+    for (let k = 0; k < 4; k++) {
+      const [x, y] = TRACT[Math.floor(now * 30 + k * n / 4) % n];
+      const g = c.createRadialGradient(x, y, 0, x, y, 26);
+      g.addColorStop(0, `rgba(255,255,240,${0.9 * alpha})`); g.addColorStop(0.4, `rgba(255,250,200,${0.5 * alpha})`); g.addColorStop(1, 'rgba(255,240,180,0)');
+      c.fillStyle = g; c.beginPath(); c.arc(x, y, 26, 0, Math.PI * 2); c.fill();
+    }
+  }
+  if (hl) drawLabel(c, ORG[hl], true);
+  else if (view.labels) for (const o of ORGANS) if (view.organs[o.id]) drawLabel(c, o, false);
+}
+function drawGridPattern(c) {
+  c.fillStyle = '#000'; c.fillRect(0, 0, SW, SH);
+  for (let x = 0; x <= SW; x += 50) { c.strokeStyle = x % 100 ? '#1d6b3a' : '#3dff8a'; c.lineWidth = x % 100 ? 1.5 : 3; c.beginPath(); c.moveTo(x, 0); c.lineTo(x, SH); c.stroke(); }
+  for (let y = 0; y <= SH; y += 50) { c.strokeStyle = y % 100 ? '#1d6b3a' : '#3dff8a'; c.lineWidth = y % 100 ? 1.5 : 3; c.beginPath(); c.moveTo(0, y); c.lineTo(SW, y); c.stroke(); }
+  c.font = '600 20px system-ui,sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = '#7cc4ff';
+  for (let x = 0; x < SW; x += 100) for (let y = 0; y < SH; y += 100) c.fillText(String.fromCharCode(65 + x / 100) + (y / 100 + 1), x + 50, y + 50);
+  c.strokeStyle = '#00e5ff'; c.lineWidth = 3;
+  c.beginPath(); c.arc(SW / 2, SH / 2, 250, 0, Math.PI * 2); c.stroke();
+  c.strokeStyle = '#ff3b6b'; c.lineWidth = 4;
+  c.beginPath(); c.moveTo(SW / 2, 0); c.lineTo(SW / 2, SH); c.moveTo(0, SH / 2); c.lineTo(SW, SH / 2); c.stroke();
+  c.strokeStyle = '#fff'; c.lineWidth = 8; c.strokeRect(4, 4, SW - 8, SH - 8);
+}
+function drawOutline(c) {
+  c.strokeStyle = '#fff'; c.lineWidth = 5; c.lineCap = 'round';
+  const L = smooth(TORSO_L), R = L.map(([x, y]) => [SW - x, y]);
+  pathOf(c, L); c.stroke(); pathOf(c, R); c.stroke();
+  c.font = '600 22px system-ui,sans-serif'; c.textBaseline = 'middle';
+  for (const l of LANDMARKS) {
+    const [x, y] = l.s;
+    c.strokeStyle = '#ffd400'; c.lineWidth = 4;
+    c.beginPath(); c.moveTo(x - 22, y); c.lineTo(x + 22, y); c.moveTo(x, y - 22); c.lineTo(x, y + 22); c.stroke();
+    c.beginPath(); c.arc(x, y, 12, 0, Math.PI * 2); c.stroke();
+    c.textAlign = x > 600 ? 'right' : 'left';
+    c.lineWidth = 6; c.strokeStyle = '#000'; const tx = x > 600 ? x - 28 : x + 28;
+    c.strokeText(l.name, tx, y - 20); c.fillStyle = '#ffd400'; c.fillText(l.name, tx, y - 20);
+  }
+}
+function drawSource(now) {
+  const c = sctx;
+  c.setTransform(Q, 0, 0, Q, 0, 0); c.globalAlpha = 1; c.shadowBlur = 0;
+  c.fillStyle = '#000'; c.fillRect(0, 0, SW, SH);
+  if (view.pattern === 'cuadricula') drawGridPattern(c);
+  else if (view.pattern === 'blanco') { c.fillStyle = '#fff'; c.fillRect(0, 0, SW, SH); }
+  else if (view.pattern === 'contorno') { drawAnatomy(c, now, 0.35); drawOutline(c); }
+  else drawAnatomy(c, now, 1);
+}
+
+/* ---------- capa de calibración (pantalla) ---------- */
+function lmScreen(l) {
+  const st = calib.lm[l.id];
+  return st.placed ? [st.x * W, st.y * H] : finalMap(...l.s);
+}
+function txt(c, s, x, y, col, align = 'left') {
+  c.font = '600 13px system-ui,sans-serif'; c.textAlign = align; c.textBaseline = 'middle';
+  c.lineWidth = 4; c.strokeStyle = '#000'; c.lineJoin = 'round'; c.strokeText(s, x, y);
+  c.fillStyle = col; c.fillText(s, x, y);
+}
+function drawOverlay() {
+  const c = octx;
+  c.setTransform(DPR, 0, 0, DPR, 0, 0); c.clearRect(0, 0, W, H);
+  const mp = calib.mask.pts;
+  if (calib.mask.enabled && mp.length >= 3) {
+    c.beginPath(); c.rect(0, 0, W, H);
+    c.moveTo(mp[0][0] * W, mp[0][1] * H); for (const p of mp) c.lineTo(p[0] * W, p[1] * H); c.closePath();
+    c.fillStyle = mode === 'mascara' ? 'rgba(0,0,0,.6)' : '#000'; c.fill('evenodd');
+  }
+  if (mode === 'mostrar') return;
+
+  if (mode === 'puntos' || mode === 'malla') {
+    c.strokeStyle = mode === 'malla' ? 'rgba(0,200,255,.75)' : 'rgba(0,200,255,.28)'; c.lineWidth = 1;
+    for (const L of meshLines) { pathOf(c, L); c.stroke(); }
+  }
+  if (mode === 'malla') {
+    nodesScr.forEach((p, i) => {
+      const o = calib.grid.off[i], moved = o[0] || o[1], s = sel && sel.type === 'node' && sel.i === i;
+      c.beginPath(); c.arc(p[0], p[1], s ? 9 : 6, 0, Math.PI * 2);
+      c.fillStyle = s ? '#ffd400' : moved ? '#ff9f1a' : '#00c8ff'; c.fill();
+      c.lineWidth = 2; c.strokeStyle = '#000'; c.stroke();
+    });
+  }
+  if (mode === 'puntos') {
+    for (const l of LANDMARKS) {
+      const p = lmScreen(l), st = calib.lm[l.id], s = sel && sel.type === 'lm' && sel.id === l.id;
+      const col = s ? '#ffd400' : st.placed ? '#3dff8a' : '#9aa3ad';
+      c.setLineDash(st.placed ? [] : [4, 4]); c.strokeStyle = col; c.lineWidth = s ? 3 : 2;
+      c.beginPath(); c.arc(p[0], p[1], 14, 0, Math.PI * 2); c.stroke();
+      c.beginPath(); c.moveTo(p[0] - 24, p[1]); c.lineTo(p[0] + 24, p[1]); c.moveTo(p[0], p[1] - 24); c.lineTo(p[0], p[1] + 24); c.stroke();
+      c.setLineDash([]);
+      txt(c, l.name + (st.placed ? '' : ' (sin colocar)'), p[0] + 20, p[1] - 18, col);
+    }
+  }
+  if (mode === 'mascara') {
+    if (mp.length) {
+      c.beginPath(); c.moveTo(mp[0][0] * W, mp[0][1] * H); for (const p of mp) c.lineTo(p[0] * W, p[1] * H);
+      if (mp.length >= 3) c.closePath();
+      c.strokeStyle = '#ff3b6b'; c.lineWidth = 2; c.stroke();
+    }
+    mp.forEach((p, i) => {
+      const s = sel && sel.type === 'mask' && sel.i === i;
+      c.beginPath(); c.arc(p[0] * W, p[1] * H, s ? 8 : 6, 0, Math.PI * 2);
+      c.fillStyle = s ? '#ffd400' : '#ff3b6b'; c.fill(); c.strokeStyle = '#000'; c.lineWidth = 2; c.stroke();
+    });
+  }
+  const nP = placedList().length;
+  const info = { puntos: `PUNTOS · ${nP} colocado(s) · ${nP === 0 ? 'sin ajuste' : nP === 1 ? 'desplazamiento' : nP === 2 ? 'escala + giro' : 'deformación libre'}`,
+    malla: `MALLA ${calib.grid.cols}×${calib.grid.rows}`, mascara: `MÁSCARA · ${mp.length} puntos${calib.mask.enabled ? '' : ' (desactivada)'}` }[mode];
+  txt(c, info, W - 16, 20, '#fff', 'right');
+}
+
+/* ---------- interacción ---------- */
+function hitLandmark(p) {
+  let best = null, bd = 22;
+  for (const l of LANDMARKS) { const s = lmScreen(l), d = Math.hypot(s[0] - p[0], s[1] - p[1]); if (d < bd) { bd = d; best = l.id; } }
+  return best;
+}
+function hitNode(p) {
+  let best = null, bd = 16;
+  nodesScr.forEach((s, i) => { const d = Math.hypot(s[0] - p[0], s[1] - p[1]); if (d < bd) { bd = d; best = i; } });
+  return best;
+}
+function hitMask(p) {
+  let best = null, bd = 14;
+  calib.mask.pts.forEach((s, i) => { const d = Math.hypot(s[0] * W - p[0], s[1] * H - p[1]); if (d < bd) { bd = d; best = i; } });
+  return best;
+}
+function insertMaskPoint(p) {
+  const pts = calib.mask.pts, n = [p[0] / W, p[1] / H];
+  if (pts.length < 3) { pts.push(n); return pts.length - 1; }
+  let bi = 0, bd = Infinity;
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i], b = pts[(i + 1) % pts.length];
+    const d = distSeg(p, [a[0] * W, a[1] * H], [b[0] * W, b[1] * H]);
+    if (d < bd) { bd = d; bi = i; }
+  }
+  pts.splice(bi + 1, 0, n); return bi + 1;
+}
+function panAll(dx, dy) {
+  calib.base.cx += dx / W; calib.base.cy += dy / H;
+  for (const l of LANDMARKS) { const s = calib.lm[l.id]; if (s.placed) { s.x += dx / W; s.y += dy / H; } }
+  changed();
+}
+function scaleAll(c, f) {
+  const b = calib.base, bx = b.cx * W, by = b.cy * H;
+  b.cx = (c[0] + (bx - c[0]) * f) / W; b.cy = (c[1] + (by - c[1]) * f) / H; b.h *= f;
+  for (const l of LANDMARKS) {
+    const s = calib.lm[l.id];
+    if (s.placed) { s.x = (c[0] + (s.x * W - c[0]) * f) / W; s.y = (c[1] + (s.y * H - c[1]) * f) / H; }
+  }
+  calib.grid.off = calib.grid.off.map(o => [o[0] * f, o[1] * f]);
+  changed();
+}
+function setNode(i, p) {
+  const w = warpFn(...nodeSrc(i));
+  calib.grid.off[i] = [(p[0] - w[0]) / W, (p[1] - w[1]) / H];
+  changed();
+}
+function setLm(id, p) { const s = calib.lm[id]; s.placed = true; s.x = p[0] / W; s.y = p[1] / H; changed(); }
+
+ov.addEventListener('contextmenu', e => e.preventDefault());
+ov.addEventListener('pointerdown', e => {
+  if (mode === 'mostrar') return;
+  const p = [e.clientX, e.clientY], right = e.button === 2, global = e.shiftKey || e.button === 1;
+  ov.setPointerCapture(e.pointerId);
+  if (!global) {
+    if (mode === 'puntos') {
+      const h = hitLandmark(p);
+      if (h) {
+        if (right) { pushUndo(); calib.lm[h].placed = false; sel = null; changed(); return; }
+        const s = lmScreen(LANDMARKS.find(l => l.id === h));
+        pushUndo(); sel = { type: 'lm', id: h }; drag = { kind: 'lm', id: h, d: [s[0] - p[0], s[1] - p[1]] }; return;
+      }
+    } else if (mode === 'malla') {
+      const h = hitNode(p);
+      if (h != null) {
+        if (right) { pushUndo(); calib.grid.off[h] = [0, 0]; changed(); return; }
+        const s = nodesScr[h];
+        pushUndo(); sel = { type: 'node', i: h }; drag = { kind: 'node', i: h, d: [s[0] - p[0], s[1] - p[1]] }; return;
+      }
+    } else if (mode === 'mascara') {
+      const h = hitMask(p);
+      if (h != null) {
+        if (right) { pushUndo(); calib.mask.pts.splice(h, 1); sel = null; changed(); return; }
+        const s = calib.mask.pts[h];
+        pushUndo(); sel = { type: 'mask', i: h }; drag = { kind: 'mask', i: h, d: [s[0] * W - p[0], s[1] * H - p[1]] }; return;
+      }
+      if (!right) {
+        pushUndo(); const i = insertMaskPoint(p);
+        if (calib.mask.pts.length >= 3 && !calib.mask.enabled) { calib.mask.enabled = true; syncUI(); }
+        sel = { type: 'mask', i }; drag = { kind: 'mask', i, d: [0, 0] }; changed(); return;
+      }
+    }
+    if (!right) sel = null;
+  } else if (mode !== 'mascara') {
+    pushUndo(); drag = { kind: 'pan', last: p };
+  }
+});
+ov.addEventListener('pointermove', e => {
+  if (!drag) return;
+  const p = [e.clientX, e.clientY];
+  if (drag.kind === 'pan') { panAll(p[0] - drag.last[0], p[1] - drag.last[1]); drag.last = p; return; }
+  const q = [p[0] + drag.d[0], p[1] + drag.d[1]];
+  if (drag.kind === 'lm') setLm(drag.id, q);
+  else if (drag.kind === 'node') setNode(drag.i, q);
+  else if (drag.kind === 'mask') { calib.mask.pts[drag.i] = [q[0] / W, q[1] / H]; changed(); }
+});
+const endDrag = () => { drag = null; };
+ov.addEventListener('pointerup', endDrag); ov.addEventListener('pointercancel', endDrag);
+ov.addEventListener('wheel', e => {
+  if (mode !== 'puntos' && mode !== 'malla') return;
+  e.preventDefault(); pushUndo(true);
+  scaleAll([e.clientX, e.clientY], e.deltaY < 0 ? 1.02 : 1 / 1.02);
+}, { passive: false });
+
+function nudge(dx, dy) {
+  if (!sel) return false;
+  pushUndo(true);
+  if (sel.type === 'lm') { const p = lmScreen(LANDMARKS.find(l => l.id === sel.id)); setLm(sel.id, [p[0] + dx, p[1] + dy]); }
+  else if (sel.type === 'node') { const p = nodesScr[sel.i]; setNode(sel.i, [p[0] + dx, p[1] + dy]); rebuild(); }
+  else if (sel.type === 'mask') { const m = calib.mask.pts[sel.i]; m[0] += dx / W; m[1] += dy / H; changed(); }
+  return true;
+}
+function cycleSel(dir) {
+  if (mode === 'puntos') {
+    const i = sel && sel.type === 'lm' ? LANDMARKS.findIndex(l => l.id === sel.id) : -1;
+    sel = { type: 'lm', id: LANDMARKS[(i + dir + LANDMARKS.length) % LANDMARKS.length].id };
+  } else if (mode === 'malla') {
+    const n = calib.grid.off.length, i = sel && sel.type === 'node' ? sel.i : -1;
+    sel = { type: 'node', i: (i + dir + n) % n };
+  } else if (mode === 'mascara' && calib.mask.pts.length) {
+    const n = calib.mask.pts.length, i = sel && sel.type === 'mask' ? sel.i : -1;
+    sel = { type: 'mask', i: (i + dir + n) % n };
+  }
+}
+function deleteSel() {
+  if (!sel) return;
+  pushUndo();
+  if (sel.type === 'lm') calib.lm[sel.id].placed = false;
+  else if (sel.type === 'node') calib.grid.off[sel.i] = [0, 0];
+  else if (sel.type === 'mask') { calib.mask.pts.splice(sel.i, 1); sel = null; }
+  changed();
+}
+let lastMode = 'puntos';
+function setMode(m) {
+  if (m !== 'mostrar') lastMode = m;
+  mode = m; sel = null; drag = null; syncUI();
+}
+function setTour(on) { view.tour = on; tourIdx = 0; tourT = performance.now() / 1000; srcDirty = true; syncUI(); saveSoon(); }
+function stepTour(d) { tourIdx = (tourIdx + d + ORGANS.length) % ORGANS.length; tourT = performance.now() / 1000; srcDirty = true; syncUI(); }
+
+addEventListener('keydown', e => {
+  if (e.target.tagName === 'SELECT' || (e.target.tagName === 'INPUT' && e.target.type !== 'checkbox')) return;
+  const k = e.key, step = e.shiftKey ? 10 : 1;
+  if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === 'z') { e.preventDefault(); return undo(); }
+  if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === 's') { e.preventDefault(); return exportJSON(); }
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const arrows = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
+  if (arrows[k]) {
+    e.preventDefault();
+    if (mode !== 'mostrar') nudge(...arrows[k]);
+    else if (view.tour && (k === 'ArrowLeft' || k === 'ArrowRight')) stepTour(k === 'ArrowLeft' ? -1 : 1);
+    return;
+  }
+  if (k === 'Tab') { e.preventDefault(); return cycleSel(e.shiftKey ? -1 : 1); }
+  if (k === 'Delete' || k === 'Backspace') { e.preventDefault(); return deleteSel(); }
+  if (k === ' ') { e.preventDefault(); return setMode(mode === 'mostrar' ? lastMode : 'mostrar'); }
+  const d = '1234567890'.indexOf(k);
+  if (d >= 0) { const o = ORGANS[d]; view.organs[o.id] = !view.organs[o.id]; srcDirty = true; syncUI(); saveSoon(); return; }
+  switch (k.toLowerCase()) {
+    case 'h': $('#panel').classList.toggle('hidden'); syncUI(); break;
+    case 'f': toggleFull(); break;
+    case 'p': setMode('puntos'); break;
+    case 'g': setMode('malla'); break;
+    case 'm': setMode('mascara'); break;
+    case 'escape': setMode('mostrar'); break;
+    case 't': { const o = ['anatomia', 'contorno', 'cuadricula', 'blanco']; view.pattern = o[(o.indexOf(view.pattern) + 1) % o.length]; srcDirty = true; syncUI(); saveSoon(); break; }
+    case 'l': view.labels = !view.labels; srcDirty = true; syncUI(); saveSoon(); break;
+    case 'a': view.anim = !view.anim; srcDirty = true; syncUI(); saveSoon(); break;
+    case 'r': setTour(!view.tour); break;
+    case 'x': pushUndo(); calib.mask.enabled = !calib.mask.enabled; changed(); syncUI(); break;
+    case '[': view.brightness = Math.max(0.2, +(view.brightness - 0.05).toFixed(2)); syncUI(); saveSoon(); break;
+    case ']': view.brightness = Math.min(1.5, +(view.brightness + 0.05).toFixed(2)); syncUI(); saveSoon(); break;
+    case '+': case '=': gridDensity(1); break;
+    case '-': gridDensity(-1); break;
+  }
+});
+function gridDensity(d) {
+  pushUndo(); resizeGrid(calib.grid.cols + d, calib.grid.rows + d); sel = null; changed(); syncUI();
+}
+
+/* ---------- panel ---------- */
+const HELP = {
+  mostrar: 'Modo presentación. Pulsa <b>H</b> para ocultar este panel y <b>R</b> para el recorrido guiado por órganos.',
+  puntos: '<b>Paso 1.</b> Arrastra cada cruz hasta su punto real en el maniquí (der./izq. = del bebé). Con 1 punto se desplaza, con 2 se escala y gira, con 3 o más se deforma para encajar. No hace falta usar todos. Clic derecho quita un punto.',
+  malla: '<b>Paso 2.</b> Ajuste fino: arrastra los nodos donde la imagen no siga la curvatura. Flechas = 1 px (Mayús ×10). <b>+ / −</b> densidad. Clic derecho reinicia un nodo. Usa la imagen «Cuadrícula» para verlo mejor.',
+  mascara: '<b>Paso 3.</b> Haz clic alrededor del contorno del maniquí para dibujar la máscara: lo de fuera se proyecta en negro. Arrastra para mover, clic derecho para borrar. Usa la imagen «Blanco» para ver los bordes.',
+};
+function buildPanel() {
+  const box = $('#organs');
+  ORGANS.forEach((o, i) => {
+    const l = document.createElement('label');
+    l.innerHTML = `<input type="checkbox" data-org="${o.id}"> <span class="sw" style="background:${o.color}"></span>${o.name} <small style="color:#777">(${(i + 1) % 10})</small>`;
+    box.appendChild(l);
+  });
+  box.addEventListener('change', e => { const id = e.target.dataset.org; if (id) { view.organs[id] = e.target.checked; srcDirty = true; saveSoon(); e.target.blur(); } });
+  document.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => { setMode(b.dataset.mode); b.blur(); });
+  $('#pattern').onchange = e => { view.pattern = e.target.value; srcDirty = true; saveSoon(); e.target.blur(); };
+  $('#bright').oninput = e => { view.brightness = +e.target.value; saveSoon(); };
+  $('#bright').onchange = e => e.target.blur();
+  const chk = (id, fn) => $(id).onchange = e => { fn(e.target.checked); e.target.blur(); };
+  chk('#tLabels', v => { view.labels = v; srcDirty = true; saveSoon(); });
+  chk('#tAnim', v => { view.anim = v; srcDirty = true; saveSoon(); });
+  chk('#tTour', v => setTour(v));
+  chk('#tMask', v => { pushUndo(); calib.mask.enabled = v; changed(); });
+  chk('#tSmooth', v => { pushUndo(); calib.smooth = v; changed(); });
+  $('#gMinus').onclick = () => gridDensity(-1);
+  $('#gPlus').onclick = () => gridDensity(1);
+  $('#bUndo').onclick = undo;
+  $('#bExport').onclick = exportJSON;
+  $('#bImport').onclick = () => $('#fImport').click();
+  $('#fImport').onchange = e => {
+    const f = e.target.files[0]; if (!f) return;
+    f.text().then(t => {
+      const d = JSON.parse(t);
+      if (!d.calib) throw new Error();
+      pushUndo(); applyData(d); saveSoon(); syncUI(); toast('Calibración importada');
+    }).catch(() => toast('Archivo no válido')).finally(() => e.target.value = '');
+  };
+  $('#bImg').onclick = () => $('#fImg').click();
+  $('#fImg').onchange = e => {
+    const f = e.target.files[0]; if (!f) return;
+    const r = new FileReader();
+    r.onload = () => { loadImg(r.result, true); };
+    r.readAsDataURL(f); e.target.value = '';
+  };
+  $('#bImgOff').onclick = () => { customImg = null; srcDirty = true; try { localStorage.removeItem(KEY_IMG); } catch (e) {} toast('Imagen propia quitada'); };
+  $('#bFull').onclick = toggleFull;
+  let armed = 0;
+  $('#bReset').onclick = e => {
+    const b = e.currentTarget;
+    if (Date.now() - armed < 3000) {
+      pushUndo(); calib = defaultCalib(); sel = null; changed(); syncUI();
+      b.textContent = 'Reiniciar calibración'; b.classList.remove('warn'); armed = 0; toast('Calibración reiniciada (Ctrl+Z para deshacer)');
+    } else {
+      armed = Date.now(); b.textContent = '¿Seguro? Pulsa otra vez'; b.classList.add('warn');
+      setTimeout(() => { b.textContent = 'Reiniciar calibración'; b.classList.remove('warn'); }, 3000);
+    }
+  };
+}
+function syncUI() {
+  document.querySelectorAll('[data-mode]').forEach(b => b.classList.toggle('on', b.dataset.mode === mode));
+  $('#modehelp').innerHTML = HELP[mode];
+  $('#pattern').value = view.pattern;
+  $('#bright').value = view.brightness;
+  $('#tLabels').checked = view.labels; $('#tAnim').checked = view.anim; $('#tTour').checked = view.tour;
+  $('#tMask').checked = calib.mask.enabled; $('#tSmooth').checked = calib.smooth;
+  document.querySelectorAll('[data-org]').forEach(i => i.checked = !!view.organs[i.dataset.org]);
+  $('#gridInfo').textContent = `${calib.grid.cols}×${calib.grid.rows}`;
+  const cap = $('#caption');
+  if (view.tour && mode === 'mostrar') { const o = ORGANS[tourIdx]; cap.innerHTML = `<b>${o.name}</b>${o.desc}`; cap.style.display = 'block'; }
+  else cap.style.display = 'none';
+  document.body.classList.toggle('nocursor', mode === 'mostrar' && $('#panel').classList.contains('hidden'));
+}
+function exportJSON() {
+  const blob = new Blob([JSON.stringify({ app: 'sira-proyeccion', version: 1, fecha: new Date().toISOString(), calib, view }, null, 1)], { type: 'application/json' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'calibracion-maniqui.json'; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  toast('Calibración exportada');
+}
+function loadImg(dataUrl, store) {
+  const img = new Image();
+  img.onload = () => {
+    customImg = img; srcDirty = true;
+    if (store) { try { localStorage.setItem(KEY_IMG, dataUrl); toast('Imagen propia cargada'); } catch (e) { toast('Imagen cargada (demasiado grande para recordarla)'); } }
+  };
+  img.src = dataUrl;
+}
+function toggleFull() {
+  if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen().catch(() => {});
+}
+let toastT = 0;
+function toast(s) { const t = $('#toast'); t.textContent = s; t.style.opacity = 1; clearTimeout(toastT); toastT = setTimeout(() => t.style.opacity = 0, 1800); }
+
+/* ---------- bucle ---------- */
+function frame(t) {
+  requestAnimationFrame(frame);
+  const now = t / 1000;
+  if (meshDirty) rebuild();
+  if (view.tour && now - tourT > 7) stepTour(1);
+  const live = (view.pattern === 'anatomia' || view.pattern === 'contorno') && !customImg && (view.anim || view.tour);
+  if (srcDirty || live) {
+    drawSource(now);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
+    srcDirty = false;
+  }
+  gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.uniform2f(uRes, W, H); gl.uniform1f(uBright, view.brightness);
+  gl.drawElements(gl.TRIANGLES, nIdx, gl.UNSIGNED_SHORT, 0);
+  drawOverlay();
+}
+
+try { const d = JSON.parse(localStorage.getItem(KEY)); if (d) applyData(d); } catch (e) {}
+try { const im = localStorage.getItem(KEY_IMG); if (im) loadImg(im, false); } catch (e) {}
+initGL(); buildPanel(); resize(); syncUI();
+addEventListener('resize', resize);
+document.addEventListener('fullscreenchange', () => setTimeout(resize, 50));
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
